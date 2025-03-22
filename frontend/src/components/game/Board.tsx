@@ -1,4 +1,4 @@
-import { useRef, useMemo, useEffect } from 'react'
+import { useRef, useMemo } from 'react'
 import * as THREE from 'three'
 import { Position } from '../../types/game'
 import rosetteImage from '../../assets/images/rosette.png'
@@ -6,6 +6,7 @@ import tileVariant1 from '../../assets/images/tile_variant_1.png'
 import tileVariant2 from '../../assets/images/tile_variant_2.png'
 import tileVariant3 from '../../assets/images/tile_variant_3.png'
 import tileVariant4 from '../../assets/images/tile_variant_4.png'
+import blueBackground from '../../assets/images/blue_background.png'
 
 const SQUARE_SIZE = 1.2
 const SPACING = 0.2
@@ -64,6 +65,19 @@ const createSideTexture = () => {
   return texture
 }
 
+// Create a single texture loader that will be reused
+const textureLoader = new THREE.TextureLoader();
+
+// Pre-load textures to avoid flickering
+const preloadedTextures = {
+  rosette: textureLoader.load(rosetteImage),
+  variant1: textureLoader.load(tileVariant1),
+  variant2: textureLoader.load(tileVariant2),
+  variant3: textureLoader.load(tileVariant3),
+  variant4: textureLoader.load(tileVariant4),
+  background: textureLoader.load(blueBackground)
+};
+
 const sideTexture = createSideTexture();
 
 export const Board = () => {
@@ -98,6 +112,22 @@ export const Board = () => {
     return 1;
   }
   
+  // Get the appropriate texture for a tile
+  const getTileTexture = useMemo(() => (pos: Position) => {
+    if (isRosette(pos)) {
+      return preloadedTextures.rosette;
+    } else {
+      const variant = getTileVariant(pos);
+      switch (variant) {
+        case 1: return preloadedTextures.variant1;
+        case 2: return preloadedTextures.variant2;
+        case 3: return preloadedTextures.variant3;
+        case 4: return preloadedTextures.variant4;
+        default: return preloadedTextures.variant1;
+      }
+    }
+  }, []);
+  
   // Create a base section of the board
   const createBaseSection = (startCol: number, endCol: number, row: number) => {
     const width = (endCol - startCol + 1) * (SQUARE_SIZE + SPACING) - SPACING + BORDER_WIDTH * 2
@@ -105,6 +135,9 @@ export const Board = () => {
     const x = START_X + (startCol + (endCol - startCol) / 2) * (SQUARE_SIZE + SPACING)
     const z = START_Z + row * (SQUARE_SIZE + SPACING)
 
+    // The thickness of the blue border layer (1.5mm = 0.0015 meters = 0.15 in THREE.js units)
+    const BLUE_BORDER_THICKNESS = 0.15
+    
     const sideMaterial = new THREE.MeshStandardMaterial({
       map: sideTexture,
       side: THREE.DoubleSide
@@ -116,12 +149,70 @@ export const Board = () => {
       clonedMaterial.map.needsUpdate = true;
     }
 
+    // Create a blue background texture for the top of the base
+    const backgroundTexture = preloadedTextures.background.clone();
+    backgroundTexture.repeat.set(width/2, depth/2);
+    backgroundTexture.wrapS = THREE.RepeatWrapping;
+    backgroundTexture.wrapT = THREE.RepeatWrapping;
+    backgroundTexture.needsUpdate = true;
+
+    // Create material for blue side border
+    const blueBorderMaterial = new THREE.MeshStandardMaterial({
+      map: backgroundTexture,
+      side: THREE.DoubleSide
+    });
+
     return (
       <group key={`base-${row}-${startCol}-${endCol}`} position={[x, 0, z]}>
-        {/* Main base */}
+        {/* Main base with brown sides */}
         <mesh>
           <boxGeometry args={[width, BASE_THICKNESS, depth]} />
           <meshStandardMaterial color="#8b4513" />
+        </mesh>
+        
+        {/* Top blue background layer */}
+        <mesh position={[0, BASE_THICKNESS/2 + 0.001, 0]} rotation={[-Math.PI/2, 0, 0]}>
+          <planeGeometry args={[width, depth]} />
+          <meshStandardMaterial 
+            map={backgroundTexture}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+        
+        {/* Blue border layer on front side */}
+        <mesh position={[0, BASE_THICKNESS/2 - BLUE_BORDER_THICKNESS/2, depth/2 + 0.001]}>
+          <planeGeometry args={[width, BLUE_BORDER_THICKNESS]} />
+          <meshStandardMaterial 
+            map={backgroundTexture}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+
+        {/* Blue border layer on back side */}
+        <mesh position={[0, BASE_THICKNESS/2 - BLUE_BORDER_THICKNESS/2, -depth/2 - 0.001]}>
+          <planeGeometry args={[width, BLUE_BORDER_THICKNESS]} />
+          <meshStandardMaterial 
+            map={backgroundTexture}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+
+        {/* Blue border layer on left side */}
+        <mesh position={[-width/2 - 0.001, BASE_THICKNESS/2 - BLUE_BORDER_THICKNESS/2, 0]} rotation={[0, Math.PI/2, 0]}>
+          <planeGeometry args={[depth, BLUE_BORDER_THICKNESS]} />
+          <meshStandardMaterial 
+            map={backgroundTexture}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+
+        {/* Blue border layer on right side */}
+        <mesh position={[width/2 + 0.001, BASE_THICKNESS/2 - BLUE_BORDER_THICKNESS/2, 0]} rotation={[0, -Math.PI/2, 0]}>
+          <planeGeometry args={[depth, BLUE_BORDER_THICKNESS]} />
+          <meshStandardMaterial 
+            map={backgroundTexture}
+            side={THREE.DoubleSide}
+          />
         </mesh>
         
         {/* Sides */}
@@ -164,21 +255,7 @@ export const Board = () => {
         
         const isRosetteTile = isRosette([row, col]);
         const tileHeight = isRosetteTile ? 0.15 : 0.1;
-        
-        // Determine which image to use
-        let textureUrl;
-        if (isRosetteTile) {
-          textureUrl = rosetteImage;
-        } else {
-          const variant = getTileVariant([row, col]);
-          switch (variant) {
-            case 1: textureUrl = tileVariant1; break;
-            case 2: textureUrl = tileVariant2; break;
-            case 3: textureUrl = tileVariant3; break;
-            case 4: textureUrl = tileVariant4; break;
-            default: textureUrl = tileVariant1;
-          }
-        }
+        const texture = getTileTexture([row, col]);
 
         return (
           <group key={`tile-${row}-${col}`} position={[x, y, z]}>
@@ -192,7 +269,7 @@ export const Board = () => {
             <mesh position={[0, tileHeight, 0]} rotation={[-Math.PI/2, 0, 0]}>
               <planeGeometry args={[SQUARE_SIZE, SQUARE_SIZE]} />
               <meshStandardMaterial 
-                map={new THREE.TextureLoader().load(textureUrl)}
+                map={texture}
                 transparent={true}
                 side={THREE.FrontSide}
                 color="#ffffff"
