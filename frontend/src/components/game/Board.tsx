@@ -1,7 +1,7 @@
-import { useRef, useState, useMemo } from 'react'
-import { useFrame, useThree } from '@react-three/fiber'
+import { useRef, useMemo, useEffect } from 'react'
 import * as THREE from 'three'
 import { Position } from '../../types/game'
+import rosetteImage from '../../assets/images/rosette.png'
 
 const SQUARE_SIZE = 1.2
 const SPACING = 0.2
@@ -27,166 +27,135 @@ const VALID_SQUARES: Position[] = [
   [2,0], [2,1], [2,2], [2,3], [2,6], [2,7]
 ]
 
-// Create static textures outside the component
-const textureFactory = (() => {
-  const createSideTexture = () => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 256
-    canvas.height = 64
-    const ctx = canvas.getContext('2d')!
-    
-    ctx.fillStyle = '#f5f5dc'
-    ctx.fillRect(0, 0, 256, 64)
-    
-    ctx.strokeStyle = '#8b4513'
-    ctx.fillStyle = '#8b4513'
-    const triangleHeight = 20
-    const triangleWidth = 20
-    const spacing = 40
-    
-    for (let x = spacing/2; x < 256; x += spacing) {
+// Create the textures outside of the component to avoid recreation
+const textureLoader = new THREE.TextureLoader();
+
+// Create dotPattern texture
+const createDotPatternTexture = () => {
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 256
+  const ctx = canvas.getContext('2d')!
+  
+  ctx.fillStyle = '#f5f5dc'
+  ctx.fillRect(0, 0, 256, 256)
+  
+  ctx.fillStyle = '#1e3a8a'
+  const dotSize = 15
+  const spacing = 50
+  
+  for (let y = spacing; y < 256; y += spacing) {
+    for (let x = spacing; x < 256; x += spacing) {
       ctx.beginPath()
-      ctx.moveTo(x, 10)
-      ctx.lineTo(x - triangleWidth/2, 10 + triangleHeight)
-      ctx.lineTo(x + triangleWidth/2, 10 + triangleHeight)
-      ctx.closePath()
+      ctx.arc(x, y, dotSize, 0, Math.PI * 2)
       ctx.fill()
     }
-
-    const texture = new THREE.CanvasTexture(canvas)
-    texture.wrapS = THREE.RepeatWrapping
-    texture.needsUpdate = false
-    return texture
   }
 
-  const createRosetteTexture = () => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 256
-    canvas.height = 256
-    const ctx = canvas.getContext('2d')!
-    
-    ctx.fillStyle = '#f5f5dc'
-    ctx.fillRect(0, 0, 256, 256)
-    
-    ctx.strokeStyle = '#1e3a8a'
-    ctx.lineWidth = 4
+  const texture = new THREE.CanvasTexture(canvas)
+  return texture
+}
+
+const dotTexture = createDotPatternTexture();
+
+// Create side texture
+const createSideTexture = () => {
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 64
+  const ctx = canvas.getContext('2d')!
+  
+  ctx.fillStyle = '#f5f5dc'
+  ctx.fillRect(0, 0, 256, 64)
+  
+  ctx.strokeStyle = '#8b4513'
+  ctx.fillStyle = '#8b4513'
+  const triangleHeight = 20
+  const triangleWidth = 20
+  const spacing = 40
+  
+  for (let x = spacing/2; x < 256; x += spacing) {
     ctx.beginPath()
-    
-    for (let i = 0; i < 8; i++) {
-      const angle = (i * Math.PI) / 4
-      const x = 128 + Math.cos(angle) * 60
-      const y = 128 + Math.sin(angle) * 60
-      ctx.moveTo(128, 128)
-      ctx.lineTo(x, y)
-    }
-    
-    ctx.arc(128, 128, 40, 0, Math.PI * 2)
-    ctx.stroke()
-    
-    ctx.fillStyle = '#1e3a8a'
-    ctx.beginPath()
-    ctx.arc(128, 128, 10, 0, Math.PI * 2)
+    ctx.moveTo(x, 10)
+    ctx.lineTo(x - triangleWidth/2, 10 + triangleHeight)
+    ctx.lineTo(x + triangleWidth/2, 10 + triangleHeight)
+    ctx.closePath()
     ctx.fill()
-
-    const texture = new THREE.CanvasTexture(canvas)
-    texture.needsUpdate = false
-    return texture
   }
 
-  const createDotPatternTexture = () => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 256
-    canvas.height = 256
-    const ctx = canvas.getContext('2d')!
-    
-    ctx.fillStyle = '#f5f5dc'
-    ctx.fillRect(0, 0, 256, 256)
-    
-    ctx.fillStyle = '#1e3a8a'
-    const dotSize = 15
-    const spacing = 50
-    
-    for (let y = spacing; y < 256; y += spacing) {
-      for (let x = spacing; x < 256; x += spacing) {
-        ctx.beginPath()
-        ctx.arc(x, y, dotSize, 0, Math.PI * 2)
-        ctx.fill()
-      }
-    }
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.wrapS = THREE.RepeatWrapping
+  return texture
+}
 
-    const texture = new THREE.CanvasTexture(canvas)
-    texture.needsUpdate = false
-    return texture
-  }
-
-  // Create static instances
-  const sideTexture = createSideTexture()
-  const rosetteTexture = createRosetteTexture()
-  const dotTexture = createDotPatternTexture()
-
-  return {
-    sideTexture,
-    rosetteTexture,
-    dotTexture
-  }
-})()
+const sideTexture = createSideTexture();
 
 export const Board = () => {
-  const [selectedPiece, setSelectedPiece] = useState<string | null>(null)
-  const [validMoves, setValidMoves] = useState<Position[]>([])
   const boardRef = useRef<THREE.Group>(null)
 
-  // Create static materials
-  const materials = useMemo(() => {
-    const sideMaterial = new THREE.MeshStandardMaterial({
-      map: textureFactory.sideTexture,
+  // Materials
+  const dotMaterial = useMemo(() => {
+    return new THREE.MeshStandardMaterial({
+      map: dotTexture,
+      color: '#ffffff',
+      metalness: 0.2,
+      roughness: 0.8
+    })
+  }, []);
+
+  // Load rosette texture once but create unique instances for each tile
+  const rosetteTexture = useMemo(() => {
+    const texture = textureLoader.load(rosetteImage);
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    return texture;
+  }, []);
+
+  const sideMaterial = useMemo(() => {
+    return new THREE.MeshStandardMaterial({
+      map: sideTexture,
       side: THREE.DoubleSide
     })
+  }, []);
 
-    const rosetteMaterial = new THREE.MeshStandardMaterial({
-      map: textureFactory.rosetteTexture,
+  // Create a new rosette material for each tile to avoid sharing issues
+  const createRosetteMaterial = () => {
+    return new THREE.MeshStandardMaterial({
+      map: rosetteTexture.clone(), // Clone the texture for each instance
       color: '#ffffff',
-      metalness: 0.2,
-      roughness: 0.8
-    })
+      emissive: '#333333',
+      metalness: 0,
+      roughness: 0.2,
+      side: THREE.DoubleSide
+    });
+  };
 
-    const dotMaterial = new THREE.MeshStandardMaterial({
-      map: textureFactory.dotTexture,
-      color: '#ffffff',
-      metalness: 0.2,
-      roughness: 0.8
-    })
-
-    return { sideMaterial, rosetteMaterial, dotMaterial }
-  }, [])
-
-  const isRosette = (pos: Position) => 
-    ROSETTES.some(([row, col]) => row === pos[0] && col === pos[1])
-
-  const isValidSquare = (pos: Position) =>
-    VALID_SQUARES.some(([row, col]) => row === pos[0] && col === pos[1])
-
-  const getSquarePosition = (row: number, col: number): [number, number, number] => [
-    START_X + col * (SQUARE_SIZE + SPACING),
-    0.3,
-    START_Z + row * (SQUARE_SIZE + SPACING)
-  ]
-
-  const createTileGeometry = () => {
-    const geometry = new THREE.BoxGeometry(SQUARE_SIZE, BASE_THICKNESS, SQUARE_SIZE)
-    return geometry
+  // Check if a position is a rosette
+  const isRosette = (pos: Position) => {
+    for (const [row, col] of ROSETTES) {
+      if (row === pos[0] && col === pos[1]) {
+        console.log(`Rosette found at position: [${pos[0]}, ${pos[1]}]`);
+        return true;
+      }
+    }
+    return false;
   }
 
+  // Create a base section of the board
   const createBaseSection = (startCol: number, endCol: number, row: number) => {
     const width = (endCol - startCol + 1) * (SQUARE_SIZE + SPACING) - SPACING + BORDER_WIDTH * 2
     const depth = SQUARE_SIZE + BORDER_WIDTH * 2
     const x = START_X + (startCol + (endCol - startCol) / 2) * (SQUARE_SIZE + SPACING)
     const z = START_Z + row * (SQUARE_SIZE + SPACING)
 
-    const material = materials.sideMaterial.clone()
-    material.map = textureFactory.sideTexture.clone()
-    material.map.repeat.set(width/2, 1)
-    material.map.needsUpdate = true
+    const clonedMaterial = sideMaterial.clone();
+    if (clonedMaterial.map) {
+      clonedMaterial.map = sideTexture.clone();
+      clonedMaterial.map.repeat.set(width/2, 1);
+      clonedMaterial.map.needsUpdate = true;
+    }
 
     return (
       <group key={`base-${row}-${startCol}-${endCol}`} position={[x, 0, z]}>
@@ -199,23 +168,35 @@ export const Board = () => {
         {/* Sides */}
         <mesh position={[0, -BASE_THICKNESS/2, depth/2]}>
           <planeGeometry args={[width, BASE_THICKNESS]} />
-          <primitive object={material} />
+          <primitive object={clonedMaterial} />
         </mesh>
         <mesh position={[0, -BASE_THICKNESS/2, -depth/2]}>
           <planeGeometry args={[width, BASE_THICKNESS]} />
-          <primitive object={material} />
+          <primitive object={clonedMaterial} />
         </mesh>
         <mesh position={[-width/2, -BASE_THICKNESS/2, 0]} rotation={[0, Math.PI/2, 0]}>
           <planeGeometry args={[depth, BASE_THICKNESS]} />
-          <primitive object={material} />
+          <primitive object={clonedMaterial} />
         </mesh>
         <mesh position={[width/2, -BASE_THICKNESS/2, 0]} rotation={[0, -Math.PI/2, 0]}>
           <planeGeometry args={[depth, BASE_THICKNESS]} />
-          <primitive object={material} />
+          <primitive object={clonedMaterial} />
         </mesh>
       </group>
     )
   }
+
+  // Log all rosette positions on component mount
+  useEffect(() => {
+    console.log("Rosette positions:", ROSETTES);
+    
+    // Check all board positions
+    VALID_SQUARES.forEach(pos => {
+      if (isRosette(pos)) {
+        console.log(`Valid rosette at [${pos[0]}, ${pos[1]}]`);
+      }
+    });
+  }, []);
 
   return (
     <group ref={boardRef}>
@@ -234,13 +215,43 @@ export const Board = () => {
           START_Z + row * (SQUARE_SIZE + SPACING)
         ]
         
+        const isRosetteTile = isRosette([row, col]);
+        
         return (
-          <mesh key={`${row}-${col}`} position={[x, y, z]}>
-            <boxGeometry args={[SQUARE_SIZE, 0.1, SQUARE_SIZE]} />
-            <primitive object={isRosette([row, col]) ? materials.rosetteMaterial : materials.dotMaterial} />
-          </mesh>
+          <group key={`tile-${row}-${col}`} position={[x, y, z]}>
+            {isRosetteTile ? (
+              // Complete rosette tile implementation with all sides properly handled
+              <>
+                {/* Main tile as a complete box with solid color */}
+                <mesh position={[0, 0.05, 0]}>
+                  <boxGeometry args={[SQUARE_SIZE, 0.15, SQUARE_SIZE]} />
+                  <meshStandardMaterial color="#f8f6db" />
+                </mesh>
+                
+                {/* Top face with rosette texture (slightly above the base to avoid z-fighting) */}
+                <mesh position={[0, 0.125 + 0.001, 0]} rotation={[-Math.PI/2, 0, 0]}>
+                  <planeGeometry args={[SQUARE_SIZE, SQUARE_SIZE]} />
+                  <meshStandardMaterial 
+                    map={rosetteTexture}
+                    transparent={true}
+                    color="#ffffff"
+                    emissive="#333333"
+                    metalness={0}
+                    roughness={0.2}
+                    side={THREE.FrontSide}
+                  />
+                </mesh>
+              </>
+            ) : (
+              // Regular tile
+              <mesh>
+                <boxGeometry args={[SQUARE_SIZE, 0.1, SQUARE_SIZE]} />
+                <primitive object={dotMaterial} />
+              </mesh>
+            )}
+          </group>
         )
       })}
     </group>
   )
-} 
+}
