@@ -53,7 +53,7 @@ def run_game_with_ai(model_path=None, ai_player=Player.TWO, verbose=True):
                 time.sleep(1)  # Short delay to make AI turns more visible
         else:
             if verbose:
-                input("\nPress Enter to roll dice...")
+                print("\nRolling dice...")
         
         roll = game.roll_dice()
         if verbose:
@@ -63,7 +63,7 @@ def run_game_with_ai(model_path=None, ai_player=Player.TWO, verbose=True):
             if verbose:
                 if game.current_player != ai_player:
                     print("No moves possible with a roll of 0!")
-                    input("\nPress Enter to continue...")
+                    time.sleep(1)  # Short delay
                 else:
                     print("AI rolled 0. No moves possible!")
                     time.sleep(1)  # Short delay
@@ -76,7 +76,7 @@ def run_game_with_ai(model_path=None, ai_player=Player.TWO, verbose=True):
             if verbose:
                 if game.current_player != ai_player:
                     print("No valid moves available!")
-                    input("\nPress Enter to continue...")
+                    time.sleep(1)  # Short delay
                 else:
                     print("AI has no valid moves available!")
                     time.sleep(1)  # Short delay
@@ -126,7 +126,7 @@ def run_game_with_ai(model_path=None, ai_player=Player.TWO, verbose=True):
             if extra_turn and verbose:
                 if game.current_player != ai_player:
                     print("\nLanded on a rosette! You get another turn!")
-                    input("Press Enter to continue...")
+                    time.sleep(1)  # Short delay
                 else:
                     print("\nAI landed on a rosette! AI gets another turn!")
                     time.sleep(1)  # Short delay
@@ -136,7 +136,7 @@ def run_game_with_ai(model_path=None, ai_player=Player.TWO, verbose=True):
             if verbose:
                 if game.current_player != ai_player:
                     print(f"\nError: {e}")
-                    input("Press Enter to continue...")
+                    time.sleep(1)  # Short delay
                 else:
                     print(f"\nAI move error: {e}")
                     time.sleep(1)  # Short delay
