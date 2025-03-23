@@ -95,8 +95,9 @@ export const Terminal: React.FC<TerminalProps> = ({
   // Connect via WebSocket
   const connectWebSocket = () => {
     try {
-      // Use direct WebSocket URL to backend
-      const wsUrl = 'ws://localhost:8000/terminal';
+      // Use relative WebSocket URL to use the Vite proxy
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/terminal`;
       console.log('Connecting to WebSocket at:', wsUrl);
       
       // Create a new WebSocket connection
