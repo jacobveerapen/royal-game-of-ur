@@ -6,6 +6,7 @@ import { Board } from './Board'
 import { DiceController, DiceResultOverlay } from './Dice'
 import { GameCounters } from './GameCounters'
 import { useGameState } from '../../hooks/useGameState'
+import { DebugPieces } from './DebugPieces'
 
 // Table dimensions and appearance
 const TABLE_WIDTH = 30
@@ -133,6 +134,8 @@ export const GameBoard = () => {
           {/* Position the Board component on the table surface */}
           <group position={[0, 0.1, 0]}>
             <Board />
+            {/* Add debug pieces to visualize coordinates */}
+            <DebugPieces />
           </group>
           <DiceController onRollComplete={handleRollComplete} />
           <GameCounters />

@@ -118,6 +118,64 @@ export const GamePieces = ({ boardState }: GamePiecesProps) => {
           floating={true}
         />
       ))}
+
+      {/* Testing multiple positions for Player 1 (black) pieces */}
+      <GamePiece 
+        key="test-p1-0-0" 
+        position={[0, 0]} 
+        color="#101010" 
+        floating={true}
+      />
+      
+      <GamePiece 
+        key="test-p1-0-3" 
+        position={[0, 3]} 
+        color="#101010" 
+        floating={true}
+      />
+      
+      <GamePiece 
+        key="test-p1-1-3" 
+        position={[1, 3]} 
+        color="#101010" 
+        floating={true}
+      />
+      
+      <GamePiece 
+        key="test-p1-2-0" 
+        position={[2, 0]} 
+        color="#101010" 
+        floating={true}
+      />
+      
+      <GamePiece 
+        key="test-p1-2-6" 
+        position={[2, 6]} 
+        color="#101010" 
+        floating={true}
+      />
+
+      {/* Testing multiple positions for Player 2 (white) pieces */}
+      <GamePiece 
+        key="test-p2-0-0" 
+        position={[0, 0]} 
+        color="#ffffff" 
+        floating={true}
+      />
+      
+      <GamePiece 
+        key="test-p2-0-6" 
+        position={[0, 6]} 
+        color="#ffffff" 
+        floating={true}
+      />
+      
+      <GamePiece 
+        key="test-p2-1-0" 
+        position={[1, 0]} 
+        color="#ffffff" 
+        floating={true}
+      />
     </group>
   )
 } 
