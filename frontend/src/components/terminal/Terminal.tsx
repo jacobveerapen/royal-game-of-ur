@@ -13,7 +13,11 @@ export const Terminal: React.FC<TerminalProps> = ({
   height = '100%',
   maxOutputLines = 500
 }) => {
-  const [output, setOutput] = useState<string[]>(['Welcome to the Royal Game of Ur Terminal', 'Connecting to the game server...']);
+  const [output, setOutput] = useState<string[]>(['Welcome to the Royal Game of Ur Terminal', 
+                                                'Select a game mode:',
+                                                '1. Play against AI',
+                                                '2. Play regular game (two players)',
+                                                'Type 1 or 2 and press Enter to select...']);
   const [input, setInput] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [connected, setConnected] = useState<boolean>(false);
@@ -22,6 +26,8 @@ export const Terminal: React.FC<TerminalProps> = ({
   const [isConnecting, setIsConnecting] = useState<boolean>(false);
   const [attemptedHttp, setAttemptedHttp] = useState<boolean>(false);
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
+  const [gameSelected, setGameSelected] = useState<boolean>(false);
+  const [gameMode, setGameMode] = useState<number | null>(null);
   
   const socketRef = useRef<WebSocket | null>(null);
   const terminalEndRef = useRef<HTMLDivElement>(null);
@@ -30,59 +36,61 @@ export const Terminal: React.FC<TerminalProps> = ({
   
   // Initialize the terminal connection
   useEffect(() => {
-    async function initTerminal() {
-      try {
-        if (isConnecting) return; // Prevent multiple connection attempts
-        
-        setIsConnecting(true);
-        // Try WebSocket first
-        console.log('Attempting WebSocket connection');
-        setUseWebSocket(true);
-        connectWebSocket();
-        
-        // Set a timeout to try HTTP fallback if WebSocket doesn't connect
-        const wsTimeout = setTimeout(() => {
-          // If not connected via WebSocket after 3 seconds, try HTTP
-          if (!connected && !attemptedHttp) {
-            console.log('WebSocket connection timeout, switching to HTTP fallback');
-            setUseWebSocket(false);
-            setAttemptedHttp(true);
-            connectHttpFallback();
-          }
-        }, 3000);
-        
-        return () => {
-          clearTimeout(wsTimeout);
-          if (pollingRef.current) {
-            clearInterval(pollingRef.current);
-          }
-        };
-      } catch (error) {
-        console.error('Error initializing terminal:', error);
-        setOutput(prev => [...prev, 'Error connecting to the game server. Please try again later.']);
-      } finally {
-        setIsConnecting(false);
-      }
-    }
-    
-    initTerminal();
-    
-    return () => {
-      // Clean up
-      if (socketRef.current) {
-        socketRef.current.close();
-      }
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
+    if (gameSelected) {
+      async function initTerminal() {
+        try {
+          if (isConnecting) return; // Prevent multiple connection attempts
+          
+          setIsConnecting(true);
+          // Try WebSocket first
+          console.log('Attempting WebSocket connection');
+          setUseWebSocket(true);
+          connectWebSocket();
+          
+          // Set a timeout to try HTTP fallback if WebSocket doesn't connect
+          const wsTimeout = setTimeout(() => {
+            // If not connected via WebSocket after 3 seconds, try HTTP
+            if (!connected && !attemptedHttp) {
+              console.log('WebSocket connection timeout, switching to HTTP fallback');
+              setUseWebSocket(false);
+              setAttemptedHttp(true);
+              connectHttpFallback();
+            }
+          }, 3000);
+          
+          return () => {
+            clearTimeout(wsTimeout);
+            if (pollingRef.current) {
+              clearInterval(pollingRef.current);
+            }
+          };
+        } catch (error) {
+          console.error('Error initializing terminal:', error);
+          setOutput(prev => [...prev, 'Error connecting to the game server. Please try again later.']);
+        } finally {
+          setIsConnecting(false);
+        }
       }
       
-      // Delete HTTP session if active
-      if (sessionId && !useWebSocket) {
-        axios.delete(`/api/terminal/${sessionId}`)
-          .catch(error => console.error('Error cleaning up HTTP session:', error));
-      }
-    };
-  }, []);
+      initTerminal();
+      
+      return () => {
+        // Clean up
+        if (socketRef.current) {
+          socketRef.current.close();
+        }
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current);
+        }
+        
+        // Delete HTTP session if active
+        if (sessionId && !useWebSocket) {
+          axios.delete(`/api/terminal/${sessionId}`)
+            .catch(error => console.error('Error cleaning up HTTP session:', error));
+        }
+      };
+    }
+  }, [gameSelected]);
   
   // Function to trim output when it exceeds the maximum number of lines
   const trimOutput = (newOutput: string[]) => {
@@ -97,7 +105,7 @@ export const Terminal: React.FC<TerminalProps> = ({
     try {
       // Use relative WebSocket URL to use the Vite proxy
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/terminal`;
+      const wsUrl = `${protocol}//${window.location.host}/terminal?gameMode=${gameMode}`;
       console.log('Connecting to WebSocket at:', wsUrl);
       
       // Create a new WebSocket connection
@@ -216,7 +224,7 @@ export const Terminal: React.FC<TerminalProps> = ({
       setOutput(prev => [...prev, 'WebSocket connection failed, trying HTTP fallback...']);
       
       // Create a new HTTP terminal session
-      const response = await axios.post('/api/terminal/create');
+      const response = await axios.post('/api/terminal/create', { gameMode });
       const sid = response.data.session_id;
       setSessionId(sid);
       setConnected(true);
@@ -377,42 +385,58 @@ export const Terminal: React.FC<TerminalProps> = ({
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    const command = input.trim();
-    setOutput(prev => trimOutput([...prev, `$ ${command || '<Enter>'}`]));
+    // Store original input to display in terminal
+    const originalInput = input.trim();
     setInput('');
-    setAutoScroll(true); // Force scroll to bottom when user sends a command
     
-    if (command === 'clear') {
-      setOutput(['Terminal cleared']);
+    // If game mode is not selected yet, handle game selection
+    if (!gameSelected) {
+      // Echo the input
+      setOutput(prev => trimOutput([...prev, `> ${originalInput}`]));
+      
+      if (originalInput === '1' || originalInput === '2') {
+        const mode = parseInt(originalInput);
+        setGameMode(mode);
+        setGameSelected(true);
+        setOutput(prev => [...prev, `Selected game mode: ${mode === 1 ? 'Play against AI' : 'Regular game (two players)'}`, 'Connecting to the game server...']);
+      } else {
+        setOutput(prev => [...prev, 'Invalid selection. Please enter 1 or 2.']);
+      }
       return;
     }
     
     if (!connected) {
-      setOutput(prev => [...prev, 'Not connected to the game server.']);
+      setOutput(prev => [...prev, 'Not connected to the game server!']);
       return;
     }
     
+    // Append input to output for echo
+    setOutput(prev => trimOutput([...prev, `> ${originalInput}`]));
+    
+    setIsLoading(true);
+    
     try {
-      setIsLoading(true);
-      
-      // Always send a command, even if empty (for run_game.py "press enter to roll")
-      if (useWebSocket && socketRef.current) {
-        // Send command via WebSocket
-        console.log('Sending command via WebSocket:', command || '<Enter>');
+      if (useWebSocket && socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        // Send the command via WebSocket
         socketRef.current.send(JSON.stringify({
           type: 'input',
-          content: command || ''  // Send empty string if no command
+          content: originalInput
         }));
       } else if (sessionId) {
-        // Send command via HTTP
-        console.log('Sending command via HTTP:', command || '<Enter>');
+        // Send the command via HTTP
         await axios.post(`/api/terminal/${sessionId}/input`, {
-          command: command || ''  // Send empty string if no command
+          command: originalInput
         });
+        
+        // Always send a command, even if empty (for run_game.py "press enter to roll")
+        if (originalInput === '') {
+          setAutoScroll(true);
+        }
       }
     } catch (error) {
-      console.error('Error sending command:', error);
-      setOutput(prev => [...prev, 'Error sending command. Connection might be lost.']);
+      console.error('Error sending input:', error);
+      setOutput(prev => [...prev, 'Error sending command. The connection may be lost.']);
+      setConnected(false);
     } finally {
       setIsLoading(false);
     }
@@ -428,6 +452,7 @@ export const Terminal: React.FC<TerminalProps> = ({
   
   // For status display
   const getConnectionStatus = () => {
+    if (!gameSelected) return 'Waiting for selection';
     if (isConnecting) return 'Connecting...';
     if (connected) {
       return useWebSocket ? 'Connected (WebSocket)' : 'Connected (HTTP)';
@@ -502,7 +527,7 @@ export const Terminal: React.FC<TerminalProps> = ({
           onChange={handleInputChange}
           className="terminal-input"
           placeholder="Type command..."
-          disabled={isLoading || !connected}
+          disabled={isLoading || (connected === false && gameSelected === true)}
           autoFocus
         />
       </form>

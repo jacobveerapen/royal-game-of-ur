@@ -232,6 +232,10 @@ async def terminal_websocket(websocket: WebSocket):
     await websocket.accept()
     logger.info("New terminal WebSocket connection accepted")
     
+    # Get game mode from query parameters
+    query_params = dict(websocket.query_params)
+    game_mode = int(query_params.get('gameMode', '2'))  # Default to regular game (mode 2)
+    
     # Generate session ID
     session_id = str(uuid.uuid4())
     process = None
@@ -241,8 +245,14 @@ async def terminal_websocket(websocket: WebSocket):
     try:
         # Get the root directory of the project
         project_root = os.path.abspath(os.path.join(current_dir, "../../../"))
-        run_game_path = os.path.join(project_root, "run_game.py")
-        logger.info(f"Starting process for {run_game_path}")
+        
+        # Choose the right script based on game mode
+        if game_mode == 1:
+            run_script_path = os.path.join(project_root, "run_game_with_ai.py")
+            logger.info(f"Starting AI game process for {run_script_path}")
+        else:
+            run_script_path = os.path.join(project_root, "run_game.py")
+            logger.info(f"Starting regular game process for {run_script_path}")
         
         # Create a pseudo-terminal
         master_fd, slave_fd = pty.openpty()
@@ -251,23 +261,24 @@ async def terminal_websocket(websocket: WebSocket):
         flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
         fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
         
-        # Start the process with the slave end of the PTY
+        # Start the game process
         process = subprocess.Popen(
-            [sys.executable, run_game_path],
+            [sys.executable, run_script_path],
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
+            text=True,
             close_fds=True,
-            text=True
+            cwd=project_root,
+            env=os.environ.copy()
         )
         
-        # Store the session
+        # Record the process in the sessions
         terminal_sessions[session_id] = {
-            'process': process,
-            'websocket': websocket,
-            'last_activity': datetime.now(),
-            'master_fd': master_fd,
-            'slave_fd': slave_fd
+            "process": process,
+            "master_fd": master_fd,
+            "last_activity": datetime.now(),
+            "game_mode": game_mode  # Store the game mode
         }
         
         logger.info(f"Process started with PID: {process.pid if process else 'unknown'}")
@@ -440,47 +451,49 @@ async def execute_command(command_req: GameCommandRequest):
     )
 
 # HTTP-based terminal API (fallback for WebSocket)
-def create_terminal_process():
+def create_terminal_process(game_mode=2):
     """Create a process running run_game.py and return its details"""
-    # Get the root directory of the project
-    project_root = os.path.abspath(os.path.join(current_dir, "../../../"))
-    run_game_path = os.path.join(project_root, "run_game.py")
-    logger.info(f"Starting process for {run_game_path} via HTTP API")
-    
-    # Create a pseudo-terminal
-    master_fd, slave_fd = pty.openpty()
-    
-    # Set non-blocking mode on the master file descriptor
-    flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
-    fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-    
-    # Start the process with the slave end of the PTY
-    process = subprocess.Popen(
-        [sys.executable, run_game_path],
-        stdin=slave_fd,
-        stdout=slave_fd,
-        stderr=slave_fd,
-        close_fds=True,
-        text=True
-    )
-    
-    session_id = str(uuid.uuid4())
-    
-    # Create a buffer for output
-    terminal_output_buffers[session_id] = deque(maxlen=1000)  # Store up to 1000 lines
-    
-    # Store the session
-    terminal_sessions[session_id] = {
-        'process': process,
-        'last_activity': datetime.now(),
-        'http_mode': True,
-        'master_fd': master_fd,
-        'slave_fd': slave_fd
-    }
-    
-    logger.info(f"HTTP terminal process started with PID: {process.pid}, session ID: {session_id}")
-    
-    return session_id, process, master_fd, slave_fd
+    try:
+        # Get the root directory of the project
+        project_root = os.path.abspath(os.path.join(current_dir, "../../../"))
+        
+        # Choose the right script based on game mode
+        if game_mode == 1:
+            run_script_path = os.path.join(project_root, "run_game_with_ai.py")
+            logger.info(f"Starting AI game process for {run_script_path} via HTTP API")
+        else:
+            run_script_path = os.path.join(project_root, "run_game.py")
+            logger.info(f"Starting regular game process for {run_script_path} via HTTP API")
+        
+        # Create a pseudo-terminal
+        master_fd, slave_fd = pty.openpty()
+        
+        # Set non-blocking mode on the master file descriptor
+        flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+        fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+        
+        # Start the process with the pseudo-terminal
+        process = subprocess.Popen(
+            [sys.executable, run_script_path],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            text=True,
+            close_fds=True,
+            cwd=project_root,
+            env=os.environ.copy()
+        )
+        
+        # Close the slave FD in the parent process, as it's now owned by the child
+        os.close(slave_fd)
+        
+        return {
+            "process": process,
+            "master_fd": master_fd
+        }
+    except Exception as e:
+        logger.error(f"Error creating terminal process: {e}")
+        return None
 
 def read_terminal_output(session_id: str, process, master_fd):
     """Background task to read output from the process and store it in a buffer"""
@@ -591,13 +604,42 @@ def read_terminal_output(session_id: str, process, master_fd):
         terminal_sessions.pop(session_id, None)
 
 @app.post("/api/terminal/create", response_model=TerminalSessionResponse)
-async def create_terminal_session(background_tasks: BackgroundTasks):
+async def create_terminal_session(background_tasks: BackgroundTasks, game_data: Optional[dict] = None):
     """Create a new terminal session and start the run_game.py process"""
+    session_id = str(uuid.uuid4())
+    logger.info(f"Creating new terminal session: {session_id}")
+    
+    # Get the game mode from the request, default to regular game (mode 2)
+    game_mode = 2  # Default to regular game
+    if game_data and 'gameMode' in game_data:
+        game_mode = game_data['gameMode']
+    
+    terminal_output_buffers[session_id] = deque(maxlen=1000)  # Store up to 1000 lines of output
+    
     try:
-        session_id, process, master_fd, slave_fd = create_terminal_process()
+        # Create the terminal process
+        process_details = create_terminal_process(game_mode=game_mode)
+        
+        if not process_details:
+            return JSONResponse(
+                status_code=500,
+                content={"message": "Failed to create terminal process"}
+            )
+        
+        terminal_sessions[session_id] = {
+            "process": process_details["process"],
+            "master_fd": process_details["master_fd"],
+            "last_activity": datetime.now(),
+            "game_mode": game_mode  # Store the game mode
+        }
         
         # Start background task to read output
-        background_tasks.add_task(read_terminal_output, session_id, process, master_fd)
+        background_tasks.add_task(
+            read_terminal_output, 
+            session_id,
+            terminal_sessions[session_id]["process"],
+            terminal_sessions[session_id]["master_fd"]
+        )
         
         return TerminalSessionResponse(
             session_id=session_id,
@@ -607,7 +649,7 @@ async def create_terminal_session(background_tasks: BackgroundTasks):
         logger.error(f"Error creating terminal session: {e}")
         return JSONResponse(
             status_code=500,
-            content={"error": f"Error creating terminal session: {str(e)}"}
+            content={"message": f"Error creating terminal session: {str(e)}"}
         )
 
 @app.get("/api/terminal/{session_id}/output", response_model=TerminalOutputResponse)

@@ -3,6 +3,7 @@ Run the Royal Game of Ur with AI integration.
 This script allows playing the game with an AI opponent using the trained RL agent.
 """
 import argparse
+import time
 from backend.ur_game.game import Game
 from backend.ur_game.game.board import Player
 from rl_agent.dqn_agent import UrDQNAgent
@@ -45,17 +46,27 @@ def run_game_with_ai(model_path=None, ai_player=Player.TWO, verbose=True):
             print("\nBoard:")
             print(game.board)
         
-        # Roll dice
-        if verbose:
-            input("\nPress Enter to roll dice...")
+        # Roll dice - only wait for input if it's human's turn
+        if game.current_player == ai_player:
+            if verbose:
+                print("\nAI is rolling the dice...")
+                time.sleep(1)  # Short delay to make AI turns more visible
+        else:
+            if verbose:
+                input("\nPress Enter to roll dice...")
+                
         roll = game.roll_dice()
         if verbose:
-            print(f"\nYou rolled: {roll}")
+            print(f"\nRolled: {roll}")
         
         if roll == 0:
             if verbose:
-                print("No moves possible with a roll of 0!")
-                input("\nPress Enter to continue...")
+                if game.current_player != ai_player:
+                    print("No moves possible with a roll of 0!")
+                    input("\nPress Enter to continue...")
+                else:
+                    print("AI rolled 0. No moves possible!")
+                    time.sleep(1)  # Short delay
             game.next_turn()
             continue
         
@@ -63,8 +74,12 @@ def run_game_with_ai(model_path=None, ai_player=Player.TWO, verbose=True):
         valid_moves = game.get_valid_moves()
         if not valid_moves:
             if verbose:
-                print("No valid moves available!")
-                input("\nPress Enter to continue...")
+                if game.current_player != ai_player:
+                    print("No valid moves available!")
+                    input("\nPress Enter to continue...")
+                else:
+                    print("AI has no valid moves available!")
+                    time.sleep(1)  # Short delay
             game.next_turn()
             continue
         
@@ -73,13 +88,14 @@ def run_game_with_ai(model_path=None, ai_player=Player.TWO, verbose=True):
             # AI's turn
             if verbose:
                 print("\nAI is thinking...")
+                time.sleep(0.5)  # Short delay for better user experience
             
             selected_piece = agent.get_move(game)
             
             if verbose:
                 status = "in hand" if selected_piece in game.board.pieces_in_hand[game.current_player] else f"at {selected_piece.position}"
                 print(f"AI selected Piece {selected_piece.piece_id} ({status})")
-                input("Press Enter to continue...")
+                time.sleep(0.5)  # Short delay to show AI's move
         else:
             # Human's turn
             if verbose:
@@ -108,14 +124,22 @@ def run_game_with_ai(model_path=None, ai_player=Player.TWO, verbose=True):
         try:
             extra_turn = game.make_move(selected_piece)
             if extra_turn and verbose:
-                print("\nLanded on a rosette! You get another turn!")
-                input("Press Enter to continue...")
+                if game.current_player != ai_player:
+                    print("\nLanded on a rosette! You get another turn!")
+                    input("Press Enter to continue...")
+                else:
+                    print("\nAI landed on a rosette! AI gets another turn!")
+                    time.sleep(1)  # Short delay
             else:
                 game.next_turn()
         except ValueError as e:
             if verbose:
-                print(f"\nError: {e}")
-                input("Press Enter to continue...")
+                if game.current_player != ai_player:
+                    print(f"\nError: {e}")
+                    input("Press Enter to continue...")
+                else:
+                    print(f"\nAI move error: {e}")
+                    time.sleep(1)  # Short delay
     
     # Game over
     if verbose:
