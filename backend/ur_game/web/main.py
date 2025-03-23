@@ -274,67 +274,85 @@ async def terminal_websocket(websocket: WebSocket):
         
         # Process output reader task
         async def read_output():
-            logger.info("Starting output reader task")
+            """Read output from the process and send it to the WebSocket."""
             buffer = ""
+            last_sent_content = None  # Track last sent content to prevent duplicates
             
-            while process.poll() is None:
-                try:
-                    # Read from the master end of the PTY
+            try:
+                while True:
                     try:
-                        data = os.read(master_fd, 1024).decode('utf-8')
-                        if data:
-                            buffer += data
-                            
-                            # Process complete lines
-                            lines = buffer.split('\n')
-                            for i, line in enumerate(lines[:-1]):  # All complete lines
-                                logger.info(f"Output from process: {line}")
-                                await websocket.send_json({
-                                    'type': 'output',
-                                    'content': line + '\n'
-                                })
-                            
-                            # Keep any partial line in the buffer
-                            buffer = lines[-1]
-                            
-                            # If we have a partial line and it ends with specific prompts, send it immediately
-                            # Special handling for the game's prompts like "Press Enter to roll dice..."
-                            if buffer and (
-                                any(buffer.endswith(c) for c in [':', '>', '$', '#']) or
-                                "Press Enter" in buffer or
-                                "Choose a piece" in buffer or
-                                "enter number" in buffer
-                            ):
-                                logger.info(f"Sending prompt: {buffer}")
-                                await websocket.send_json({
-                                    'type': 'output',
-                                    'content': buffer
-                                })
-                                buffer = ""
-                    except (OSError, BlockingIOError):
-                        # No data available, just continue
-                        pass
-                    
-                    await asyncio.sleep(0.05)  # Small delay between reads
-                except Exception as e:
-                    logger.error(f"Error reading process output: {e}")
-                    break
-            
-            # Send any remaining buffer content
-            if buffer:
-                logger.info(f"Sending remaining buffer: {buffer}")
-                await websocket.send_json({
-                    'type': 'output',
-                    'content': buffer
-                })
-            
-            # Send exit message when process ends
-            exit_code = process.poll()
-            logger.info(f"Process exited with code: {exit_code}")
-            await websocket.send_json({
-                'type': 'exit',
-                'exit_code': exit_code
-            })
+                        if process.poll() is not None:
+                            # Process has exited
+                            await websocket.send_json({
+                                "type": "exit",
+                                "exit_code": process.poll()
+                            })
+                            break
+                        
+                        # Non-blocking read from master
+                        try:
+                            # Read larger chunks of data at once
+                            data = os.read(master_fd, 8192).decode('utf-8')
+                            if data:
+                                buffer += data
+                                
+                                # Process complete lines and send immediately
+                                lines = buffer.split('\n')
+                                for i in range(len(lines) - 1):
+                                    line_content = lines[i] + '\n'  # Add back the newline for exact formatting
+                                    logger.info(f"Output from process: {lines[i]}")
+                                    
+                                    # Only send if not duplicate of last content
+                                    if line_content != last_sent_content:
+                                        await websocket.send_json({
+                                            "type": "output",
+                                            "content": line_content
+                                        })
+                                        last_sent_content = line_content
+                                
+                                # Keep any incomplete line in buffer
+                                buffer = lines[-1]
+                                
+                                # More aggressive detection of prompts and important game output
+                                if buffer:
+                                    is_prompt = (
+                                        any(buffer.endswith(c) for c in [':', '>', '.', '!', '?', ' ']) or
+                                        "Press Enter" in buffer or
+                                        "Choose a piece" in buffer or
+                                        "enter number" in buffer or
+                                        "You rolled" in buffer or
+                                        "Available pieces" in buffer or
+                                        "Piece" in buffer or
+                                        len(buffer) > 5  # Even shorter buffers may be important prompts
+                                    )
+                                    
+                                    if is_prompt:
+                                        logger.info(f"Sending prompt: {buffer}")
+                                        # Only send if not a duplicate
+                                        if buffer != last_sent_content:
+                                            await websocket.send_json({
+                                                "type": "output",
+                                                "content": buffer
+                                            })
+                                            last_sent_content = buffer
+                                        buffer = ""
+                        except (OSError, BlockingIOError):
+                            # No data available, just continue
+                            pass
+                        
+                        # Shorter delay to prevent CPU hogging but still be responsive
+                        await asyncio.sleep(0.02)
+                    except Exception as e:
+                        logger.error(f"Error in read_output: {e}")
+                        await websocket.send_json({
+                            "type": "error",
+                            "content": str(e)
+                        })
+                        break
+            except WebSocketDisconnect:
+                logger.info("WebSocket disconnected in read_output")
+            except Exception as e:
+                logger.error(f"Unexpected error in read_output: {e}")
         
         # Start output reader
         output_task = asyncio.create_task(read_output())
@@ -468,6 +486,7 @@ def read_terminal_output(session_id: str, process, master_fd):
     """Background task to read output from the process and store it in a buffer"""
     logger.info(f"Starting output reader for HTTP terminal session {session_id}")
     buffer = ""
+    last_line = None  # Track the last line to prevent duplicates
     
     while True:
         # Check if process still exists
@@ -481,10 +500,11 @@ def read_terminal_output(session_id: str, process, master_fd):
             terminal_output_buffers[session_id].append(f"Process exited with code {process.poll()}")
             break
         
-        # Read a line from process output
+        # Read output from process
         try:
             try:
-                data = os.read(master_fd, 1024).decode('utf-8')
+                # Read larger chunks of data at once
+                data = os.read(master_fd, 8192).decode('utf-8')
                 if data:
                     buffer += data
                     
@@ -492,28 +512,44 @@ def read_terminal_output(session_id: str, process, master_fd):
                     lines = buffer.split('\n')
                     for i, line in enumerate(lines[:-1]):  # All complete lines
                         logger.info(f"HTTP output from process ({session_id}): {line}")
-                        terminal_output_buffers[session_id].append(line)
+                        
+                        # Only add if it's not a duplicate of the last line
+                        if line != last_line:
+                            # Send all lines to client, even empty ones to preserve formatting
+                            terminal_output_buffers[session_id].append(line)
+                            last_line = line
                     
                     # Keep any partial line in the buffer
                     buffer = lines[-1]
                     
-                    # If we have a partial line and it ends with specific prompts, send it immediately
-                    # Special handling for the game's prompts like "Press Enter to roll dice..."
-                    if buffer and (
-                        any(buffer.endswith(c) for c in [':', '>', '$', '#', '.']) or
-                        "Press Enter" in buffer or
-                        "Choose a piece" in buffer or
-                        "enter number" in buffer
-                    ):
-                        logger.info(f"HTTP sending prompt ({session_id}): {buffer}")
-                        terminal_output_buffers[session_id].append(buffer)
-                        buffer = ""
+                    # More aggressive detection of prompts and important game output
+                    if buffer:
+                        is_prompt = (
+                            any(buffer.endswith(c) for c in [':', '>', '.', '!', '?', ' ']) or
+                            "Press Enter" in buffer or
+                            "Choose a piece" in buffer or
+                            "enter number" in buffer or
+                            "You rolled" in buffer or
+                            "Available pieces" in buffer or
+                            "Piece" in buffer or
+                            len(buffer) > 5  # Even shorter buffers may be important prompts
+                        )
+                        
+                        if is_prompt:
+                            logger.info(f"HTTP sending prompt ({session_id}): {buffer}")
+                            
+                            # Only add if it's not a duplicate of the last line
+                            if buffer != last_line:
+                                terminal_output_buffers[session_id].append(buffer)
+                                last_line = buffer
+                            
+                            buffer = ""
             except (OSError, BlockingIOError):
                 # No data available, just continue
                 pass
                 
-            # Small delay between reads
-            time.sleep(0.05)
+            # Shorter delay between reads for more responsive output
+            time.sleep(0.02)
         except Exception as e:
             logger.error(f"Error reading process output for HTTP session {session_id}: {e}")
             terminal_output_buffers[session_id].append(f"Error reading output: {str(e)}")
@@ -522,7 +558,8 @@ def read_terminal_output(session_id: str, process, master_fd):
     # Send any remaining buffer content
     if buffer:
         logger.info(f"HTTP sending remaining buffer ({session_id}): {buffer}")
-        terminal_output_buffers[session_id].append(buffer)
+        if buffer != last_line:
+            terminal_output_buffers[session_id].append(buffer)
             
     # Process has exited or error occurred
     if session_id in terminal_sessions:
@@ -587,9 +624,42 @@ async def get_terminal_output(session_id: str):
     
     # Get output from buffer
     if session_id in terminal_output_buffers:
+        # Get all lines but need to manage duplicates
         lines = list(terminal_output_buffers[session_id])
-        # Clear the buffer after reading
+        
+        # Initialize sent lines tracking if not exists
+        if 'sent_lines' not in terminal_sessions[session_id]:
+            terminal_sessions[session_id]['sent_lines'] = set()
+            terminal_sessions[session_id]['sent_line_count'] = 0
+        
+        # Get list of lines we've already sent
+        sent_lines = terminal_sessions[session_id]['sent_lines']
+        
+        # Check if this is an exact duplicate of what we've sent before
+        if len(lines) > 0:
+            # Create a hash of the current lines
+            lines_hash = hash(tuple(lines))
+            
+            # If we've sent this exact batch before, clear it
+            if lines_hash in sent_lines:
+                terminal_output_buffers[session_id].clear()
+                return TerminalOutputResponse(
+                    lines=[],
+                    has_more=terminal_sessions[session_id]['process'].poll() is None
+                )
+            
+            # Add this batch's hash to sent_lines
+            sent_lines.add(lines_hash)
+            
+            # Manage the size of sent_lines to prevent memory bloat
+            terminal_sessions[session_id]['sent_line_count'] += 1
+            if terminal_sessions[session_id]['sent_line_count'] > 50:
+                terminal_sessions[session_id]['sent_lines'] = set()
+                terminal_sessions[session_id]['sent_line_count'] = 0
+        
+        # Clear buffer after processing
         terminal_output_buffers[session_id].clear()
+        
         return TerminalOutputResponse(
             lines=lines,
             has_more=terminal_sessions[session_id]['process'].poll() is None

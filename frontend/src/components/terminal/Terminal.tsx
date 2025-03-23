@@ -122,34 +122,29 @@ export const Terminal: React.FC<TerminalProps> = ({
             // Handle the output
             const content = message.content;
             
-            // Check if it contains important game prompts
-            const hasDicePrompt = content.includes("Press Enter to roll dice");
-            const hasPiecePrompt = content.includes("Choose a piece") || content.includes("enter number");
+            // Process the content line by line to preserve exact formatting
+            const lines = content.split('\n');
             
-            // Special handling for complete lines vs. prompts
-            if (content.endsWith('\n')) {
-              const lines = content.split('\n');
-              // Add all non-empty lines
-              for (let i = 0; i < lines.length - 1; i++) {
-                if (lines[i]) {
+            // If there are multiple lines, add each one separately to preserve exact formatting
+            if (lines.length > 1) {
+              for (let i = 0; i < lines.length; i++) {
+                // Don't skip empty lines to preserve exact formatting
+                if (i < lines.length - 1 || lines[i].length > 0) {
                   setOutput(prev => trimOutput([...prev, lines[i]]));
                 }
               }
-            } else {
-              // This is a prompt without a newline or a partial line
+            } else if (content.length > 0) {
+              // Add single line content
               setOutput(prev => trimOutput([...prev, content]));
             }
             
-            // If this is a prompt that requires immediate attention, make it visible
-            if (hasDicePrompt || hasPiecePrompt) {
-              // Ensure the prompt is visible
-              setAutoScroll(true); // Force scroll to bottom for important prompts
-              setTimeout(() => {
-                if (terminalEndRef.current) {
-                  terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
-                }
-              }, 100);
-            }
+            // Always scroll to bottom for game content to ensure all prompts are visible
+            setAutoScroll(true);
+            setTimeout(() => {
+              if (terminalEndRef.current) {
+                terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
+              }
+            }, 50);
           } else if (message.type === 'error') {
             setOutput(prev => trimOutput([...prev, `Error: ${message.content}`]));
             setAutoScroll(true); // Scroll to errors
@@ -243,11 +238,16 @@ export const Terminal: React.FC<TerminalProps> = ({
       clearInterval(pollingRef.current);
     }
     
-    // Keep track of seen lines to prevent duplicates
-    const seenLines = new Set<string>();
+    // Keep track of last poll time for performance monitoring
     let lastPollTime = Date.now();
     
-    // Poll every 500ms
+    // Keep track of last seen lines to prevent duplicates
+    const processedLines = new Set<string>();
+    
+    // Track duplicate consecutive lines
+    let lastOutputSize = 0;
+    
+    // Poll every 300ms for more responsive updates
     pollingRef.current = window.setInterval(async () => {
       if (!sid) return;
       
@@ -256,21 +256,55 @@ export const Terminal: React.FC<TerminalProps> = ({
         const { lines, has_more } = response.data;
         
         if (lines && lines.length > 0) {
-          // Process and add new lines
+          // Check if we're getting the exact same response as last time
+          const responseKey = JSON.stringify(lines);
+          if (lines.length === lastOutputSize && processedLines.has(responseKey)) {
+            // This is a duplicate response, skip it
+            return;
+          }
+          
+          // Keep track of this response to avoid duplicates
+          processedLines.add(responseKey);
+          lastOutputSize = lines.length;
+          
+          // Limit the size of our tracking set to avoid memory issues
+          if (processedLines.size > 20) {
+            // Convert to array, remove oldest entries, convert back to set
+            const processedArray = Array.from(processedLines);
+            processedLines.clear();
+            processedArray.slice(-10).forEach(item => processedLines.add(item));
+          }
+          
+          // Create a batch update to avoid multiple state updates
           const newLines: string[] = [];
+          
+          // Check if lines contain prompt responses that were already shown
           for (const line of lines) {
-            // Skip if empty or already seen recently
-            if (!line.trim() || seenLines.has(line)) continue;
-            
-            // Add to seen set (with 10-second expiration)
-            seenLines.add(line);
-            setTimeout(() => seenLines.delete(line), 10000);
-            
+            // Add each line to our batch
             newLines.push(line);
           }
           
+          // Update state once with all new lines
           if (newLines.length > 0) {
-            setOutput(prev => trimOutput([...prev, ...newLines]));
+            setOutput(prev => {
+              // Check for duplicates at the end of the output
+              const combinedOutput = [...prev, ...newLines];
+              
+              // Remove exact consecutive duplicates
+              const deduplicatedOutput = combinedOutput.filter(
+                (line, index, arr) => index === 0 || line !== arr[index - 1]
+              );
+              
+              return trimOutput(deduplicatedOutput);
+            });
+            
+            // Always scroll to bottom to ensure prompts are visible
+            setAutoScroll(true);
+            setTimeout(() => {
+              if (terminalEndRef.current) {
+                terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
+              }
+            }, 50);
           }
         }
         
@@ -301,7 +335,7 @@ export const Terminal: React.FC<TerminalProps> = ({
           }
         }
       }
-    }, 500);
+    }, 300); // Faster polling for more responsive updates
   };
   
   // Auto-scroll to bottom when output changes if autoScroll is enabled
@@ -400,6 +434,38 @@ export const Terminal: React.FC<TerminalProps> = ({
     return 'Disconnected';
   };
   
+  // Function to determine the CSS class for a terminal line based on content
+  const getLineClass = (line: string) => {
+    // Base class
+    let className = "terminal-line";
+    
+    // Check for prompt lines
+    if (line.includes("Press Enter to roll dice") || 
+        line.includes("Choose a piece to move") || 
+        line.includes("You rolled:") || 
+        line.includes("Available pieces") ||
+        line.includes("enter number")) {
+      className += " terminal-prompt-line";
+    }
+    // Check for board visualization lines
+    else if (line.includes("|")) {
+      className += " terminal-board-line";
+    }
+    // Check for game header lines
+    else if (line.includes("Royal Game of Ur") || 
+             line.includes("Current Player:") ||
+             line.includes("Pieces in hand") ||
+             line.includes("Completed pieces")) {
+      className += " terminal-header-line";
+    }
+    // Check for game ending lines
+    else if (line.includes("Game Over") || line.includes("wins!")) {
+      className += " terminal-ending-line";
+    }
+    
+    return className;
+  };
+
   return (
     <div className="terminal-container" style={{ width, height }}>
       <div className="terminal-header">
@@ -413,7 +479,7 @@ export const Terminal: React.FC<TerminalProps> = ({
         ref={outputRef}
       >
         {output.map((line, i) => (
-          <div key={i} className="terminal-line">{line}</div>
+          <div key={i} className={getLineClass(line)}>{line}</div>
         ))}
         {isLoading && <div className="terminal-line loading">Processing...</div>}
         <div ref={terminalEndRef} />
