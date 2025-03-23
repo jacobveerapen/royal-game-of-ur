@@ -1,6 +1,5 @@
 import { useRef } from 'react'
 import * as THREE from 'three'
-import { ThreeElements } from '@react-three/fiber'
 import { SquareProps } from '../../types/game'
 
 const SQUARE_SIZE = 1.2

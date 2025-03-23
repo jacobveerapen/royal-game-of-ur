@@ -1,0 +1,5 @@
+Please save the rosette image you shared to this location (frontend/src/assets/images/rosette.png). 
+
+This is a placeholder file to indicate where the image should be saved. You'll need to manually save the image from your clipboard or download it and save as 'rosette.png' in this directory.
+
+Once saved, the image will be properly displayed on the game board. 
